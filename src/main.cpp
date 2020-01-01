@@ -2,10 +2,11 @@
  * waterweight
  * 
  **/
-#include <Arduino.h>
-#include <WiFi.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266mDNS.h>
 #include <Adafruit_NeoPixel.h>
-#include <MQTT.h>
 
 int pressureAnalogPin = 0; // Pin where our pressure pad is located.
 int pressureReading;
@@ -15,16 +16,13 @@ int noPressure = 5; // Threshold for no pressure on the pad
 int lightPressure = 50; // Threshold for light pressure on the pad
 int mediumPressure = 200; // Threshold for medium pressure on the pad
 
-char ssid[8] = "network";
-char pass[9] = "password";
-int status = WL_IDLE_STATUS;
-WiFiClient net;
+const char* ssid = "ssid";
+const char* pass = "password";
 
-int webServerPort = 80;
-WiFiServer webServer(webServerPort);
+ESP8266WebServer webServer(80);
 
-int neoPixelDigitalPin = 6;
-int numberOfPixels = 1;
+const int neoPixelDigitalPin = 13;
+const int numberOfPixels = 1;
 //   NEO_KHZ800  800 KHz bitstream (most NeoPixel products w/WS2812 LEDs)
 //   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
 //   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
@@ -32,9 +30,47 @@ int numberOfPixels = 1;
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 Adafruit_NeoPixel pixel(numberOfPixels, neoPixelDigitalPin, NEO_GRB + NEO_KHZ800);
 
-char mqttBroker[11] = "10.0.0.106";
-int mqttBrokerPort = 1883;
-MQTTClient mqttclient;
+String fontColor = "style=\"color:black\"";
+
+void handleRoot() {
+	char temp[400];
+	int sec = millis() / 1000;
+    int min = sec / 60;
+    int hr = min / 60;
+	
+	snprintf(temp, 400,
+    "<html>\
+     <head>\
+       <meta http-equiv='refresh' content='5'/>\
+       <title>WaterWeight</title>\
+       <style>\
+         body { background-color: #cccccc; font-family: Arial, Helvetica, Sans-Serif; Color: #000088; }\
+       </style>\
+       </head>\
+       <body>\
+         <h1>WaterWeight</h1>\
+         <p>Uptime: %02d:%02d:%02d</p>\
+		 <p>Pressure: %04d</p>\
+       </body>\
+     </html>",
+    hr, min % 60, sec % 60, pressureReading);
+    webServer.send(200, "text/html", temp);
+}
+
+void handleNotFound(){
+	String message = "File Not Found\n\n";
+	message += "URI: ";
+	message += webServer.uri();
+	message += "\nMethod: ";
+	message += (webServer.method() == HTTP_GET)?"GET":"POST";
+	message += "\nArguments: ";
+	message += webServer.args();
+	message += "\n";
+	for (uint8_t i = 0; i < webServer.args(); i++){
+		message += " " + webServer.argName(i) + ": " + webServer.arg(i) + "\n";
+	}
+	webServer.send(404, "text/plain", message);
+}
 
 void printWifiData() {
 	// Print your IP address
@@ -65,137 +101,81 @@ void printCurrentNet() {
 	Serial.print("SSID: ");
 	Serial.println(WiFi.SSID());
 
-	// Print the MAC address of the AP
-	byte bssid[6];
-	WiFi.BSSID(bssid);
-	Serial.print("BSSID: ");
-	Serial.print(bssid[5], HEX);
-	Serial.print(":");
-	Serial.print(bssid[4], HEX);
-	Serial.print(":");
-	Serial.print(bssid[3], HEX);
-	Serial.print(":");
-	Serial.print(bssid[2], HEX);
-	Serial.print(":");
-	Serial.print(bssid[1], HEX);
-	Serial.print(":");
-	Serial.println(bssid[0], HEX);
-
 	// Print the received signal strength
 	long rssi = WiFi.RSSI();
 	Serial.print("Signal strength (RSSI):");
 	Serial.println(rssi);
-
-	// Print the encryption type
-	byte encryption = WiFi.encryptionType();
-	Serial.print("Encryption Type:");
-	Serial.println(encryption, HEX);
-	Serial.println();
 }
 
 void setup(void) {
 	// Start serial
-	Serial.begin(9600);
+	Serial.begin(115200);
 
 	// Connect to WiFi
-	while (status != WL_CONNECTED) {
-		Serial.print("Connecting");
-		status =  WiFi.begin(ssid, pass);
-		delay(10000);
+	WiFi.mode(WIFI_STA);
+	WiFi.begin(ssid, pass);
+	Serial.print(".");
+	
+	// Wait for connection
+	while (WiFi.status() != WL_CONNECTED) {
+		delay(500);
+		Serial.print(".");
 	}
+	Serial.println("");
 	Serial.println("Connected");
 	printCurrentNet();
 	printWifiData();
+
+	if (MDNS.begin("esp8266")) {
+    	Serial.println("MDNS responder started");
+  		}
+
+  	webServer.on("/", handleRoot);
+
+  	webServer.on("/inline", [](){
+    	webServer.send(200, "text/plain", "this works as well");
+  	});
+
+  	webServer.onNotFound(handleNotFound);
 	webServer.begin();
 	Serial.println("Webserver started");
 	
 	// Start NeoPixel
 	pixel.begin();
 	pixel.show();
-
-	// Connect to MQTTBroker
-	mqttclient.begin(mqttBroker, mqttBrokerPort, net); 
 }
  
 void loop(void) {
-	String fontColor = "style=\"color:black\">";
-	// Read FSR and update NeoPixel
+	webServer.handleClient();
 	pressureReading = analogRead(pressureAnalogPin);
 	if (pressureReading != lastPressureReading){
 		String str = String(pressureReading);
 		str.toCharArray(pressureReadingChar,4);
 		Serial.print("Pressure Pad Reading = ");
 		Serial.println(pressureReading);
-		mqttclient.publish("/appliances/coffeemachine", pressureReadingChar);
 		float voltage = pressureReading * (5.0 / 1023.0);
 		Serial.print("Voltage = ");
 		Serial.println(voltage);
 		if (pressureReading < noPressure){
-			fontColor = "style=\"color:red\">";
+			fontColor = "style=\"color:red\"";
 			pixel.setPixelColor(1, 255, 0, 0);
 			pixel.show();
 		}
 		if (pressureReading > noPressure && pressureReading < lightPressure){
-			fontColor = "style=\"color:red\">";
+			fontColor = "style=\"color:red\"";
 			pixel.setPixelColor(1, 255, 128, 0);
 			pixel.show();
 		}
 		if (pressureReading > lightPressure && pressureReading < mediumPressure){
-			fontColor = "style=\"color:orange\">";	
+			fontColor = "style=\"color:orange\"";	
 			pixel.setPixelColor(1, 255, 255, 0);
 			pixel.show();
 		}
 		if (pressureReading > mediumPressure){
-			fontColor = "style=\"color:green\">";
+			fontColor = "style=\"color:green\"";
 			pixel.setPixelColor(1, 0, 255, 0);
 			pixel.show();
 		}
 	}
-
-	// Serve website to clients
-	WiFiClient client = webServer.available();
-	if (client){
-		Serial.println("Client connected");
-		boolean currentLineIsBlank = true;
-		while (client.connected()){
-			if (client.available()){
-				char c = client.read();
-				if (c == '\n' && currentLineIsBlank){
-					client.println("HTTP/1.1 200 OK");
-					client.println("Content-Type: text/html");
-					client.println("Connection: close");
-					client.println("Refresh: 5");
-					client.println();
-					client.println("<!DOCTYPE HTML>");
-					client.println("<html>");
-					client.println("<head>");
-					client.println("<meta charset=\"utf-8\">");
-					client.println("<title>WaterWeight</title>");
-					client.println("</head>");
-					client.println("<body>");
-					client.println("<h1>WaterWeight</h1>");
-					client.print("<p ");
-					client.print(fontColor);
-					client.print(">Pressure: ");
-					client.print(pressureReading);
-					client.println("</p>");
-					client.println("</body>");
-					client.println("</html>");
-				}
-				
-				if (c == '\n'){
-					currentLineIsBlank = true;
-				}
-				
-				else if (c != '\r'){
-					currentLineIsBlank = false;
-				}
-			}
-		}
-	}
-	delay(1);
-	
-	client.stop();
-	Serial.println("Client disconnected");
+	delay(1000);
 }
-
