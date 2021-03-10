@@ -7,6 +7,7 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <Adafruit_NeoPixel.h>
+#include <ArduinoJson.h>
 
 int pressureAnalogPin = 0;
 int pressureReading = 0;
@@ -52,6 +53,9 @@ void initWebServer() {
 	server.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request){
 		request->send_P(200, "text/plain", getWeight(calculateWeight(analogRead(pressureAnalogPin))).c_str());
 	});
+	server.on("/ssid", HTTP_GET, [](AsyncWebServerRequest *request){
+		request->send_P(200, "text/plain", getSSID().c_str());
+	});
 	server.begin();
 }
 
@@ -61,7 +65,17 @@ float calculateWeight(int pressureReading) {
 }
 
 String getWeight(float weight) {
-	return String(weight)
+	StaticJsonDocument<16> doc;
+	doc["weight"] = weight;
+	weightJSON = serializeJson(doc, Serial);
+	return weightJSON
+}
+
+String getSSID(){
+taticJsonDocument<48> doc;
+	doc["ssid"] = ssid;
+	ssidJSON = serializeJson(doc, Serial);
+	return ssidJSON
 }
 
 void updateNeoPixel(float weightReading){
