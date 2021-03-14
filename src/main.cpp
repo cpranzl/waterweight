@@ -3,17 +3,19 @@
  *
  **/
 
+#include <SPIFFS.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 
-int pressureAnalogPin = 0;
+int pressureAnalogPin = 32;
 int pressureReading = 0;
+float weight = 0;
 int noWeight = 5;
 int lightWeight = 50;
-int mediumweight = 200;
+int mediumWeight = 200;
 
 const char* ssid = "SSID";
 const char* password = "PASSWORD";
@@ -23,21 +25,44 @@ AsyncWebServer server(80);
 const int neoPixelDigitalPin = 13;
 const int numberOfPixels = 1;
 
-void initNeoPixel() {
-	Adafruit_NeoPixel pixel(numberOfPixels,
-							neoPixelDigitalPin,
-							NEO_GRB + NEO_KHZ800);
-}
+Adafruit_NeoPixel pixel(numberOfPixels,
+						neoPixelDigitalPin,
+						NEO_GRB + NEO_KHZ800);
+
+void listFilesInDir(File dir, int numTabs = 1);
 
 void initSPIFFS() {
-	if (!SPIFFS.begin()) {
-		Serial.println("Cannot mount SPIFFS volume...");
+	Serial.println(F("Inizializing FS..."));
+	if (SPIFFS.begin()){
+		Serial.println(F("SPIFFS mounted correctly."));
+	}else{
+		Serial.println(F("!An error occurred during SPIFFS mounting"));
 	}
+
+	unsigned int totalBytes = SPIFFS.totalBytes();
+	unsigned int usedBytes = SPIFFS.usedBytes();
+
+	Serial.println("===== File system info =====");
+
+	Serial.print("Total space:      ");
+	Serial.print(totalBytes);
+	Serial.println("byte");
+
+	Serial.print("Total space used: ");
+	Serial.print(usedBytes);
+	Serial.println("byte");
+
+	Serial.println();
+
+	File dir = SPIFFS.open("/");
+	listFilesInDir(dir);
+	
+	Serial.println();
 }
 
 void initWiFi() {
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(WIFI_SSID, WIFI_PASS);
+	WiFi.begin(ssid, password);
 	Serial.printf("Trying to connect [%s] ", WiFi.macAddress().c_str());
 	while (WiFi.status() != WL_CONNECTED) {
 		Serial.print(".");
@@ -46,36 +71,50 @@ void initWiFi() {
 	Serial.printf(" %s\n", WiFi.localIP().toString().c_str());
 }
 
-void initWebServer() {
-	server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-		request->send(SPIFFS, "/index.html");
-	});
-	server.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request){
-		request->send_P(200, "text/plain", getWeight(calculateWeight(analogRead(pressureAnalogPin))).c_str());
-	});
-	server.on("/ssid", HTTP_GET, [](AsyncWebServerRequest *request){
-		request->send_P(200, "text/plain", getSSID().c_str());
-	});
-	server.begin();
+void listFilesInDir(File dir, int numTabs) {
+	while (true) {
+		File entry =  dir.openNextFile();
+		if (! entry) {
+			// no more files in the folder
+			break;
+		}
+		for (uint8_t i = 0; i < numTabs; i++) {
+			Serial.print('\t');
+		}
+		Serial.print(entry.name());
+		if (entry.isDirectory()) {
+			Serial.println("/");
+			listFilesInDir(entry, numTabs + 1);
+		} else {
+			// display zise for file, nothing for directory
+			Serial.print("\t\t");
+			Serial.println(entry.size(), DEC);
+		}
+		entry.close();
+	}
 }
 
-float calculateWeight(int pressureReading) {
-	float weight = pressureReading * (5.0 / 1023.0)
+float calculateWeight() {
+	pressureReading = analogRead(pressureAnalogPin);
+	weight = pressureReading * (5.0 / 1023.0);
+	Serial.println(weight);
 	return weight;
 }
 
-String getWeight(float weight) {
+String getWeight() {
 	StaticJsonDocument<16> doc;
 	doc["weight"] = weight;
-	weightJSON = serializeJson(doc, Serial);
-	return weightJSON
+	String weightJSON;
+	serializeJson(doc, weightJSON);
+	return weightJSON;
 }
 
 String getSSID(){
-taticJsonDocument<48> doc;
+	StaticJsonDocument<48> doc;
 	doc["ssid"] = ssid;
-	ssidJSON = serializeJson(doc, Serial);
-	return ssidJSON
+	String ssidJSON;
+	serializeJson(doc, ssidJSON);
+	return ssidJSON;
 }
 
 void updateNeoPixel(float weightReading){
@@ -99,13 +138,22 @@ void updateNeoPixel(float weightReading){
 
 void setup(void){
 	Serial.begin(115200); delay(500);
-	initNeoPixel();
+
 	initSPIFFS();
 	initWiFi();
-	initWebServer();
+
+	server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+	server.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request){
+		request->send_P(200, "text/plain", getWeight().c_str());
+	});
+	server.on("/ssid", HTTP_GET, [](AsyncWebServerRequest *request){
+		request->send_P(200, "text/plain", getSSID().c_str());
+	});
+
+	server.begin();
 }
 
 void loop(void){
-	updateNeoPixel(calculateWeight(analogRead(pressureAnalogPin)));
+	updateNeoPixel(calculateWeight());
 	delay(10000);
 }
