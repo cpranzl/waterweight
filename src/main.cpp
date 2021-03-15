@@ -17,8 +17,8 @@ int noWeight = 5;
 int lightWeight = 50;
 int mediumWeight = 200;
 
-const char* ssid = "SSID";
-const char* password = "PASSWORD";
+const char* ssid = "PiNET";
+const char* password = "570F913EFC";
 
 AsyncWebServer server(80);
 
@@ -96,7 +96,7 @@ void listFilesInDir(File dir, int numTabs) {
 
 float calculateWeight() {
 	pressureReading = analogRead(pressureAnalogPin);
-	weight = pressureReading * (5.0 / 1023.0);
+	weight = (pressureReading * (5.0 / 1023.0)) * 100;
 	Serial.println(weight);
 	return weight;
 }
