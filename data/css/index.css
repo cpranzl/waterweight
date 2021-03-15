@@ -22,7 +22,7 @@ body {
 
 .panel {
   display: grid;
-  grid-gap: 3em;
+  grid-gap: 1em;
   justify-items: center;
 }
 
