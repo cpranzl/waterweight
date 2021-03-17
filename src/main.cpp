@@ -9,18 +9,28 @@
 #include <ESPAsyncWebServer.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
+#include <PubSubClient.h>
 
 int pressureAnalogPin = 32;
 int pressureReading = 0;
 float weight = 0;
+float lastWeight = 0;
 int noWeight = 5;
 int lightWeight = 50;
 int mediumWeight = 200;
 
-const char* ssid = "PiNET";
-const char* password = "570F913EFC";
+const char* ssid = "SSID";
+const char* password = "PASSWORD";
 
-AsyncWebServer server(80);
+AsyncWebServer webserver(80);
+
+const char* mqttServer = "MQTTBROKER";
+const int mqttPort = 1883;
+const char* mqttUser = "USERNAME";
+const char* mqttPassword = "PASSWORD";
+
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
 
 const int neoPixelDigitalPin = 13;
 const int numberOfPixels = 1;
@@ -35,7 +45,8 @@ void initSPIFFS() {
 	Serial.println(F("Inizializing FS..."));
 	if (SPIFFS.begin()){
 		Serial.println(F("SPIFFS mounted correctly."));
-	}else{
+	}
+    else {
 		Serial.println(F("!An error occurred during SPIFFS mounting"));
 	}
 
@@ -63,12 +74,22 @@ void initSPIFFS() {
 void initWiFi() {
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(ssid, password);
-	Serial.printf("Trying to connect [%s] ", WiFi.macAddress().c_str());
+	Serial.printf("Connecting to WiFi...");
 	while (WiFi.status() != WL_CONNECTED) {
 		Serial.print(".");
 		delay(500);
 	}
-	Serial.printf(" %s\n", WiFi.localIP().toString().c_str());
+	Serial.printf(" connected with IP %s\n", WiFi.localIP().toString().c_str());
+}
+
+void initMQTT() {
+    mqttClient.connect("Waterweight", mqttUser, mqttPassword);
+    Serial.println("Connecting to MQTT...");
+    while (!mqttClient.connected()) {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.printf(" connected\n");
 }
 
 void listFilesInDir(File dir, int numTabs) {
@@ -102,11 +123,11 @@ float calculateWeight() {
 }
 
 String getWeight() {
-	StaticJsonDocument<16> doc;
+    StaticJsonDocument<16> doc;
 	doc["weight"] = weight;
-	String weightJSON;
-	serializeJson(doc, weightJSON);
-	return weightJSON;
+	String ssidJSON;
+	serializeJson(doc, ssidJSON);
+	return ssidJSON;
 }
 
 String getSSID(){
@@ -117,23 +138,33 @@ String getSSID(){
 	return ssidJSON;
 }
 
-void updateNeoPixel(float weightReading){
-	if (weightReading < noWeight){
-		pixel.setPixelColor(1, 255, 0, 0);
-		pixel.show();
-	}
-	if (weightReading > noWeight && weightReading < lightWeight){
-		pixel.setPixelColor(1, 255, 128, 0);
-		pixel.show();
-	}
-	if (weightReading > lightWeight && weightReading < mediumWeight){
-		pixel.setPixelColor(1, 255, 255, 0);
-		pixel.show();
-	}
-	if (weightReading > mediumWeight){
-		pixel.setPixelColor(1, 0, 255, 0);
-		pixel.show();
-	}
+void updateNeoPixel(){
+    if (weight != lastWeight){
+        if (weight < noWeight){
+            pixel.setPixelColor(1, 255, 0, 0);
+            pixel.show();
+        }
+        if (weight > noWeight && weight < lightWeight){
+            pixel.setPixelColor(1, 255, 128, 0);
+            pixel.show();
+        }
+        if (weight > lightWeight && weight < mediumWeight){
+            pixel.setPixelColor(1, 255, 255, 0);
+            pixel.show();
+        }
+        if (weight > mediumWeight){
+            pixel.setPixelColor(1, 0, 255, 0);
+            pixel.show();
+        }
+        lastWeight = weight;
+    }
+}
+
+void updateMQTT(){
+    if (weight != lastWeight){
+        mqttClient.publish("ww/weight", getWeight().c_str());
+        lastWeight = weight;
+    }
 }
 
 void setup(void){
@@ -141,19 +172,22 @@ void setup(void){
 
 	initSPIFFS();
 	initWiFi();
+    initMQTT();
 
-	server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
-	server.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request){
+	webserver.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+	webserver.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request){
 		request->send_P(200, "text/plain", getWeight().c_str());
 	});
-	server.on("/ssid", HTTP_GET, [](AsyncWebServerRequest *request){
+	webserver.on("/ssid", HTTP_GET, [](AsyncWebServerRequest *request){
 		request->send_P(200, "text/plain", getSSID().c_str());
 	});
 
-	server.begin();
+	webserver.begin();
 }
 
 void loop(void){
-	updateNeoPixel(calculateWeight());
+    calculateWeight();
+	updateNeoPixel();
+    updateMQTT();
 	delay(10000);
 }
